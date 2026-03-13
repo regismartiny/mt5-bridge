@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import ApexChart from 'react-apexcharts';
 import { getHistoricalData } from '../api/nodejsApiClient.ts';
 import {CsvExporter} from "./exprotToCsv.tsx";
@@ -110,9 +110,11 @@ export function CandleChart() {
 
 
 
-    useEffect(() => {
-        fetchData(timeframe, fromDate, toDate, symbol);
-    }, [timeframe, fromDate, toDate, symbol]);
+
+    // Remove auto-fetch. Fetch only on button click.
+    // useEffect(() => {
+    //     fetchData(timeframe, fromDate, toDate, symbol);
+    // }, [timeframe, fromDate, toDate, symbol]);
 
     const options: ApexCharts.ApexOptions = {
         chart: {
@@ -233,6 +235,7 @@ export function CandleChart() {
         }
     };
 
+
     return (
         <div className="bg-white rounded-xl shadow-lg p-6 border border-gray-100">
             <div className="mb-6">
@@ -295,6 +298,20 @@ export function CandleChart() {
                     </select>
                 </div>
 
+
+                {/* Fetch Data Button - align with other controls */}
+                <div className="flex flex-col">
+                    <label className="text-sm font-medium text-gray-700 mb-2 invisible">Fetch</label>
+                    <button
+                        className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition cursor-pointer font-sans"
+                        style={{ minHeight: '40px' }}
+                        onClick={() => fetchData(timeframe, fromDate, toDate, symbol)}
+                        disabled={isLoading}
+                    >
+                        {isLoading ? 'Loading...' : 'Fetch Data'}
+                    </button>
+                </div>
+
                 <div className="flex flex-col justify-end">
                     <label className="text-sm font-medium text-gray-700 mb-2">Export</label>
                     <CsvExporter
@@ -305,16 +322,6 @@ export function CandleChart() {
                         toDate={toDate}
                     />
                 </div>
-
-                {isLoading && (
-                    <div className="flex items-end">
-                        <div className="flex items-center space-x-2 px-3 py-2">
-                            <div
-                                className="animate-spin rounded-full h-4 w-4 border-2 border-blue-500 border-t-transparent"></div>
-                            <span className="text-sm text-gray-600">Loading...</span>
-                        </div>
-                    </div>
-                )}
             </div>
 
             <div className="relative">

@@ -1,7 +1,6 @@
 import { useEffect, useState, useRef } from "react";
-
-const WS_URL = "ws://127.0.0.1:8890";
-const BASE_API_URL = "http://localhost:8891/v1";
+import callAPI from "../services/apiCallService";
+import wsService from "../services/wsService";
 
 interface WsMessage {
     id: number;
@@ -15,57 +14,8 @@ interface OHLCItem {
     depth: number;
 }
 
-// Singleton WebSocket instance and subscribers
-let wsInstance: WebSocket | null = null;
-let wsSubscribers: ((msg: WsMessage) => void)[] = [];
-let isWsConnected = false;
-
-function createWebSocket() {
-    if (wsInstance) return;
-
-    wsInstance = new WebSocket(WS_URL);
-
-    wsInstance.onopen = () => {
-        console.log("WebSocket connected");
-        isWsConnected = true;
-    };
-
-    wsInstance.onmessage = (event) => {
-        try {
-            const parsedData = JSON.parse(event.data);
-            const newMsg: WsMessage = {
-                id: Date.now(),
-                timestamp: new Date().toLocaleTimeString(),
-                data: parsedData,
-            };
-            wsSubscribers.forEach((cb) => cb(newMsg));
-        } catch (err) {
-            console.error("Failed to parse WS message:", err);
-        }
-    };
-
-    wsInstance.onerror = (event) => {
-        console.error("WebSocket error:", event);
-        isWsConnected = false;
-    };
-
-    wsInstance.onclose = () => {
-        console.log("WebSocket disconnected");
-        isWsConnected = false;
-        wsInstance = null;
-    };
-}
-
-function subscribeToWs(cb: (msg: WsMessage) => void) {
-    wsSubscribers.push(cb);
-}
-
-function unsubscribeFromWs(cb: (msg: WsMessage) => void) {
-    wsSubscribers = wsSubscribers.filter((subscriber) => subscriber !== cb);
-}
-
 export default function MultiEndpointWsStreaming() {
-    // States for different endpoints
+// States for different endpoints
     const [symbolsInput, setSymbolsInput] = useState("");
     const [ohlcInput, setOhlcInput] = useState("");
     const [mbookInput, setMbookInput] = useState("");
@@ -77,72 +27,31 @@ export default function MultiEndpointWsStreaming() {
     const messageIdRef = useRef(0);
 
     useEffect(() => {
-        createWebSocket();
+        wsService.connect();
 
-        const handleNewMessage = (msg: WsMessage) => {
+        const handleNewMessage = (data: any) => {
             messageIdRef.current += 1;
+            const msg: WsMessage = {
+                id: Date.now() + Math.random(),
+                timestamp: new Date().toLocaleTimeString(),
+                data,
+            };
             setMessages((prev) => [msg, ...prev].slice(0, 100));
         };
 
-        subscribeToWs(handleNewMessage);
-        setIsConnected(isWsConnected);
+        const handleStatusChange = (connected: boolean) => {
+            setIsConnected(connected);
+        };
+
+        wsService.addListener(handleNewMessage);
+        wsService.addStatusListener(handleStatusChange);
+        setIsConnected(wsService.getConnectedStatus());
 
         return () => {
-            unsubscribeFromWs(handleNewMessage);
+            wsService.removeListener(handleNewMessage);
+            wsService.removeStatusListener(handleStatusChange);
         };
     }, []);
-
-    // Generic API call function
-    const callAPI = async (endpoint: string, payload: any, description: string) => {
-        try {
-            const url = `${BASE_API_URL}/${endpoint}`;
-            console.log(`Sending to ${description}:`, url);
-            console.log(`Payload:`, JSON.stringify(payload, null, 2));
-
-            const response = await fetch(url, {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                },
-                body: JSON.stringify(payload),
-            });
-
-            console.log("Response status:", response.status);
-
-            if (!response.ok) {
-                const contentType = response.headers.get("content-type");
-                let errorMessage = `HTTP ${response.status}`;
-
-                if (contentType && contentType.includes("application/json")) {
-                    const errorData = await response.json();
-                    errorMessage = errorData.message || errorData.error || errorMessage;
-                } else {
-                    const errorText = await response.text();
-                    console.log("Error response text:", errorText);
-                    if (errorText.includes("<!doctype html>") || errorText.includes("<html")) {
-                        errorMessage = `${description} endpoint not found. Check if your server is running and the route exists.`;
-                    } else {
-                        errorMessage = errorText.substring(0, 200) + "...";
-                    }
-                }
-
-                throw new Error(errorMessage);
-            }
-
-            const result = await response.text();
-            console.log(`${description} response:`, result);
-            console.log(`✅ ${description} sent successfully`);
-        } catch (error) {
-            console.error(`❌ ${description} request failed:`, error);
-
-            if (error instanceof TypeError && error.message.includes("fetch")) {
-                alert(`Cannot connect to ${description} server. Make sure your server is running on localhost:8891`);
-            } else {
-                const errorMessage = error instanceof Error ? error.message : String(error);
-                alert(`${description} Error: ${errorMessage}`);
-            }
-        }
-    };
 
     // Handler for track/prices
     const handlePricesSubmit = async () => {

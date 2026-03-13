@@ -1,8 +1,11 @@
+
 type WsListener = (data: any) => void;
+type WsStatusListener = (isConnected: boolean) => void;
 
 class WsService {
     private ws: WebSocket | null = null;
     private listeners: WsListener[] = [];
+    private statusListeners: WsStatusListener[] = [];
     private isConnected = false;
 
     connect() {
@@ -17,6 +20,7 @@ class WsService {
 
         this.ws.onopen = () => {
             this.isConnected = true;
+            this.notifyStatusListeners();
             console.log("WsService: WebSocket connected");
         };
 
@@ -35,6 +39,7 @@ class WsService {
 
         this.ws.onclose = () => {
             this.isConnected = false;
+            this.notifyStatusListeners();
             console.log("WsService: WebSocket disconnected");
             this.ws = null;
         };
@@ -46,7 +51,19 @@ class WsService {
             this.ws.close();
             this.ws = null;
             this.isConnected = false;
+            this.notifyStatusListeners();
         }
+    }
+    addStatusListener(listener: WsStatusListener) {
+        this.statusListeners.push(listener);
+    }
+
+    removeStatusListener(listener: WsStatusListener) {
+        this.statusListeners = this.statusListeners.filter((l) => l !== listener);
+    }
+
+    private notifyStatusListeners() {
+        this.statusListeners.forEach((listener) => listener(this.isConnected));
     }
 
     addListener(listener: WsListener) {
