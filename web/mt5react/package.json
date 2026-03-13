@@ -11,7 +11,7 @@
   },
   "dependencies": {
     "apexcharts": "^4.7.0",
-    "lightweight-charts": "^5.0.7",
+    "lightweight-charts": "^5.1.0",
     "lucide-react": "^0.511.0",
     "react": "^19.1.0",
     "react-apexcharts": "^1.7.0",
