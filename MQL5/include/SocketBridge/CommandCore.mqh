@@ -6,11 +6,11 @@
 #property copyright "Copyright 2025, MetaQuotes Ltd."
 #property link      "https://www.mql5.com"
 
-#include <Data.mqh>
-#include <HttpLib.mqh>
-#include <HistoryManager.mqh>
+#include <SocketBridge/Data.mqh>
+#include <SocketBridge/HttpLib.mqh>
+#include <SocketBridge/HistoryManager.mqh>
 #include <Trade/Trade.mqh>
-#include <ValidationUtils.mqh>
+#include <SocketBridge/ValidationUtils.mqh>
 
 struct JsonResponse {
     string jsonContent;
@@ -588,7 +588,7 @@ JsonResponse CCommandCore::RetriveHistoricalData(string symbol, string timeFrame
  
     string jsonData = "[";
     for(int i = 0; i < bars; i++) {
-        string t = TimeToString(rates[i].time, TIME_DATE | TIME_SECONDS);
+        string t = TimeToString(rates[i].time, TIME_DATE | TIME_MINUTES | TIME_SECONDS);
         StringReplace(t, ".", "-");
         StringReplace(t, " ", "T");
 

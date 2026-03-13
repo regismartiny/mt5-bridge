@@ -3,7 +3,7 @@
 //|  Class to manage TCP server socket + accept clients              |
 //+------------------------------------------------------------------+
 
-#include <socketlib.mqh>
+#include <SocketBridge/socketlib.mqh>
 
 #import "kernel32.dll"
 void RtlMoveMemory(char &dest[], int &src, int length);
