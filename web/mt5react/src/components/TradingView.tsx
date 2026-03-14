@@ -18,16 +18,6 @@ const TIMEFRAMES = [
     { value: 'D1', label: '1 Day' }
 ];
 
-// Helper map to get timeframe in seconds
-const TIMEFRAME_SECONDS: Record<string, number> = {
-    M1: 60,
-    M5: 300,
-    M15: 900,
-    H1: 3600,
-    H4: 14400,
-    D1: 86400,
-};
-
 const TradingView: React.FC = () => {
     const firstContainerRef = useRef<HTMLDivElement>(null);
     const chartRef = useRef<IChartApi | null>(null);
@@ -46,6 +36,9 @@ const TradingView: React.FC = () => {
     useEffect(() => {
         const container = firstContainerRef.current;
         if (!container) return;
+        if (getComputedStyle(container).position === 'static') {
+            container.style.position = 'relative';
+        }
 
         // Responsive resize
         const getResponsiveSize = () => {
@@ -54,6 +47,8 @@ const TradingView: React.FC = () => {
             return { width, height };
         };
         const { width, height } = getResponsiveSize();
+
+        // Create chart with responsive options
         const chartOptions =  { width, height, autoSize: true, timeScale: { timeVisible: true, secondsVisible: false }, 
             grid: { vertLines: { visible: false } , horzLines: { visible: false } }, 
             layout: { background: { type: ColorType.VerticalGradient, color: '#09010100' }, textColor: '#7c7979' } };
@@ -72,6 +67,27 @@ const TradingView: React.FC = () => {
         });
         seriesRef.current = candlestickSeries;
         lastDataRef.current = [];
+
+        // Add legend
+        const legend = document.createElement('div');
+        legend.style.cssText = 'position: absolute; left: 12px; top: 12px; z-index: 1; font-size: 14px; font-family: sans-serif; line-height: 18px; font-weight: 300;';
+        container.appendChild(legend);
+
+        const firstRow = document.createElement('div');
+        firstRow.innerHTML = symbol;
+        firstRow.style.color = '#a9a9a9';
+        legend.appendChild(firstRow);
+
+        chart.subscribeCrosshairMove(param => {
+            let priceFormatted = '';
+            if (param.time) {
+                const data: any = param.seriesData.get(candlestickSeries);
+                if (data) {
+                    priceFormatted = `(O:${data.open} H:${data.high} L:${data.low} C:${data.close})`;
+                }
+            }
+            firstRow.innerHTML = `${symbol} ${priceFormatted ? `<strong>${priceFormatted}</strong>` : ''}`;
+        });
 
         // Attach price alert plugin
         const userPriceAlertsPrimitive = new UserPriceAlerts();
