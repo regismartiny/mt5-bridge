@@ -44,6 +44,17 @@ export interface OrderHistoryResponse {
     data: Order[];
 }
 
+export interface Symbol {
+    name: string;
+    trade_mode: string;
+    description: string;
+    path: string;
+}
+
+export interface SymbolListResponse {
+    symbols: Symbol[];
+}
+
 
 export async function getAccount(): Promise<Account> {
     const res = await fetch(`${BASE_URL}/account`);
@@ -221,6 +232,25 @@ export async function getQuote(symbol: string): Promise<Quote> {
         let errorMessage = '';
         const errorData = await res.json();
         errorMessage = errorData?.details || `Failed to fetch quote for ${symbol}`;
+        throw new Error(errorMessage);
+    }
+
+    return res.json();
+}
+
+export async function getSymbols(): Promise<SymbolListResponse> {
+    const res = await fetch(`${BASE_URL}/symbol/list`, {
+        method: 'GET',
+        headers: { 'Content-Type': 'application/json' },
+    });
+
+    if (!res.ok) {
+        let errorMessage = `Failed to fetch symbols: ${res.status} ${res.statusText}`;
+        try {
+            const errorData = await res.json();
+            errorMessage = errorData?.details || errorMessage;
+        } catch (_) {}
+        console.error(errorMessage);
         throw new Error(errorMessage);
     }
 

@@ -141,3 +141,12 @@ export const getQuote = async (symbol: string) => {
         url: `/quote?symbol=${encodeURIComponent(symbol)}`,
     });
 }
+
+// Attempt to fetch available symbols/instruments from the external API
+export const getSymbols = async () => {
+    console.log('Fetching available symbols from external API...');
+    return apiRequest({
+        method: 'GET',
+        url: `/symbol/list`,
+    });
+}

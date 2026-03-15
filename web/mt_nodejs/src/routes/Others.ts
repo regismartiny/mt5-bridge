@@ -1,5 +1,5 @@
 import { Router, Request, Response, NextFunction } from 'express';
-import {fetchPriceHistory, getQuote} from '../services/SocketBridgeApi';
+import {getQuote, getSymbols} from '../services/SocketBridgeApi';
 
 const router = Router();
 
@@ -26,6 +26,24 @@ router.get('/quote', async (req: Request, res: Response, next: NextFunction) => 
         const quote = await getQuote(symbol as string);
 
         res.json(quote);
+    } catch (error) {
+        next(error);
+    }
+});
+
+/**
+ * @swagger
+ * /symbols:
+ *   get:
+ *     summary: Get available symbols/instruments
+ *     responses:
+ *       200:
+ *         description: Success
+ */
+router.get('/symbol/list', async (req: Request, res: Response, next: NextFunction) => {
+    try {
+        const symbols = await getSymbols();
+        res.json(symbols);
     } catch (error) {
         next(error);
     }

@@ -8,33 +8,59 @@ import { correctOHLCData, fetchHistoricalOHLC, fetchHistoricalOHLCBars } from '.
 import type { OHLCPoint } from '../services/dataFeedService';
 import { useState } from "react";
 import wsService from '../services/wsService';
-import callAPI, { createAlert, deleteAlert, postPriceUpdate, listAlerts } from "../services/apiCallService.ts";
+import callAPI, { createAlert, deleteAlert, listAlerts } from "../services/apiCallService.ts";
 import { TIMEFRAMES } from "../services/timeFrameUtilsService.ts";
+import { getSymbols } from '../api/nodejsApiClient';
+import type { Symbol, SymbolListResponse } from '../api/nodejsApiClient';
 
 const TradingView: React.FC = () => {
-    const firstContainerRef = useRef<HTMLDivElement>(null);
-    const chartRef = useRef<IChartApi | null>(null);
-    const seriesRef = useRef<any>(null);
-    const [symbol, setSymbol] = useState('BTCUSD');
-    const [timeframe, setTimeframe] = useState('M1');
-
     const formatDateTimeLocal = (d: Date) => {
         const pad = (n: number) => n.toString().padStart(2, '0');
         return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
     };
 
+    const firstContainerRef = useRef<HTMLDivElement>(null);
+    const chartRef = useRef<IChartApi | null>(null);
+    const seriesRef = useRef<any>(null);
+    const [symbol, setSymbol] = useState('BTCUSD');
+    const [symbolOptions, setSymbolOptions] = useState<string[]>(['BTCUSD']);
+    const [timeframe, setTimeframe] = useState('M1');
     const [fromDate, setFromDate] = useState<string>(formatDateTimeLocal(new Date(new Date().setHours(0, 0, 0, 0))));
     const [toDate, setToDate] = useState<string>(formatDateTimeLocal(new Date()));
     const [isLoading, setIsLoading] = useState(false);
     const [fitContent, setFitContent] = useState<boolean>(false);
     const [error, setError] = useState<string | null>(null);
-
+  
     // Chart setup and responsive logic
     // Store last data for live updates
     const lastDataRef = useRef<any[]>([]);
     const visibleRangeTimeoutRef = useRef<number | null>(null);
+    const userPriceAlertsRef = useRef<UserPriceAlerts | null>(null);
+    const legendFirstRowRef = useRef<HTMLDivElement | null>(null);
+    const alertMapRef = useRef<Map<string, number>>(new Map());
+    const symbolRef = useRef<string>(symbol);
+    const timeframeRef = useRef<string>(timeframe);
+
+    useEffect(() => { symbolRef.current = symbol; }, [symbol]);
+    useEffect(() => { timeframeRef.current = timeframe; }, [timeframe]);
 
     useEffect(() => {
+        // On mount, attempt to fetch available symbols from backend and populate datalist options
+        let mounted = true;
+        (async () => {
+            try {
+                console.log('Fetching symbols from backend...');
+                const res: SymbolListResponse = await getSymbols();
+                console.log('Fetched symbols from backend:', res);
+                if (!mounted) return;
+                if (!!res && Array.isArray(res.symbols) && res.symbols.length > 0) {
+                    setSymbolOptions(res.symbols.map((s: Symbol) => s.name));
+                }
+            } catch (err) {
+                console.warn('Failed to fetch symbols from backend, using defaults.', err);
+            }
+        })();
+
         const container = firstContainerRef.current;
         if (!container) return;
         if (getComputedStyle(container).position === 'static') {
@@ -75,9 +101,10 @@ const TradingView: React.FC = () => {
         container.appendChild(legend);
 
         const firstRow = document.createElement('div');
-        firstRow.innerHTML = symbol;
+        firstRow.innerHTML = symbolRef.current;
         firstRow.style.color = '#a9a9a9';
         legend.appendChild(firstRow);
+        legendFirstRowRef.current = firstRow;
 
         chart.subscribeCrosshairMove(param => {
             let priceFormatted = '';
@@ -87,7 +114,10 @@ const TradingView: React.FC = () => {
                     priceFormatted = `(O:${data.open} H:${data.high} L:${data.low} C:${data.close})`;
                 }
             }
-            firstRow.innerHTML = `${symbol} ${priceFormatted ? `<strong>${priceFormatted}</strong>` : ''}`;
+            const displaySymbol = symbolRef.current;
+            if (legendFirstRowRef.current) {
+                legendFirstRowRef.current.innerHTML = `${displaySymbol} ${priceFormatted ? `<strong>${priceFormatted}</strong>` : ''}`;
+            }
         });
 
         // Infinite scroll logic (debounced)
@@ -103,7 +133,7 @@ const TradingView: React.FC = () => {
                     const earliestDate = new Date(earliestTime);
                     console.log(`Loading more data from ${earliestDate.toISOString()} (bars=${numberBarsToLoad})`);
                     try {
-                        const data = await fetchHistoricalOHLCBars(symbol, earliestDate, numberBarsToLoad, timeframe);
+                        const data = await fetchHistoricalOHLCBars(symbolRef.current, earliestDate, numberBarsToLoad, timeframeRef.current);
                         mergeOHLCUpdates(data);
                     } catch (err) {
                         console.error('Failed to load historical bars', err);
@@ -114,20 +144,18 @@ const TradingView: React.FC = () => {
 
         // Attach price alert plugin
         const userPriceAlertsPrimitive = new UserPriceAlerts();
-        userPriceAlertsPrimitive.setSymbolName(symbol);
+        userPriceAlertsPrimitive.setSymbolName(symbolRef.current);
         candlestickSeries.attachPrimitive(userPriceAlertsPrimitive);
-
-        // Map UI alert id -> backend alert numeric id
-        const alertMap = new Map<string, number>();
+        userPriceAlertsRef.current = userPriceAlertsPrimitive;
 
         // Named handlers so we can unsubscribe/resubscribe while importing existing alerts
         const onAlertAdded = async (alertInfo: UserAlertInfo) => {
             try {
                 const current = lastDataRef.current && lastDataRef.current.length > 0 ? lastDataRef.current[lastDataRef.current.length - 1].close : NaN;
                 const direction = Number.isFinite(current) && alertInfo.price > current ? 'above' : 'below';
-                const created = await createAlert({ symbol, target_price: alertInfo.price, direction });
+                const created = await createAlert({ symbol: symbolRef.current, target_price: alertInfo.price, direction });
                 if (created && created.id) {
-                    alertMap.set(alertInfo.id, created.id);
+                    alertMapRef.current.set(alertInfo.id, created.id);
                 }
                 console.log(`➕ Alert added @ ${alertInfo.price} (uiId=${alertInfo.id}) backendId=${created?.id}`);
             } catch (err) {
@@ -137,13 +165,13 @@ const TradingView: React.FC = () => {
 
         const onAlertRemoved = async (id: string) => {
             try {
-                const backendId = alertMap.get(id);
+                const backendId = alertMapRef.current.get(id);
                 if (!backendId) {
                     console.log('No backend mapping for alert', id);
                     return;
                 }
                 await deleteAlert(backendId);
-                alertMap.delete(id);
+                alertMapRef.current.delete(id);
                 console.log(`❌ Alert removed uiId=${id} backendId=${backendId}`);
             } catch (err) {
                 console.error('Error deleting backend alert', err);
@@ -152,39 +180,6 @@ const TradingView: React.FC = () => {
 
         userPriceAlertsPrimitive.alertAdded().subscribe(onAlertAdded);
         userPriceAlertsPrimitive.alertRemoved().subscribe(onAlertRemoved);
-
-        // Load existing backend alerts for this symbol and populate UI without creating duplicates
-        (async () => {
-            try {
-                const backendAlerts: any = await listAlerts(true);
-                if (Array.isArray(backendAlerts) && backendAlerts.length > 0) {
-                    const symbolAlerts = backendAlerts.filter((a: any) => a && a.symbol === symbol);
-                    if (symbolAlerts.length > 0) {
-                        // Temporarily unsubscribe to avoid creating backend duplicates when adding to UI
-                        userPriceAlertsPrimitive.alertAdded().unsubscribe(onAlertAdded);
-                        for (const a of symbolAlerts) {
-                            try {
-                                const uiId = (userPriceAlertsPrimitive as any).addAlert(a.target_price);
-                                alertMap.set(uiId, a.id);
-                                console.log(`Loaded backend alert ${a.id} -> uiId=${uiId} @ ${a.target_price}`);
-                            } catch (e) {
-                                console.error('Failed to add UI alert for backend alert', a, e);
-                            }
-                        }
-                        // Re-subscribe handler
-                        userPriceAlertsPrimitive.alertAdded().subscribe(onAlertAdded);
-                    }
-                }
-            } catch (err) {
-                console.error('Failed to load backend alerts', err);
-            }
-        })();
-
-        // Track symbol for ohlc updates
-        callAPI("track/ohlc", { ohlc: [{ symbol: symbol, time_frame: timeframe, depth: 3 }] }, "Track OHLC updates");
-
-        // Track symbol for price updates
-        callAPI("track/prices", { symbols: [symbol] }, "Track Price updates");
 
         // Real-time ohlc updates via wsService (must be top-level)
         wsService.connect();
@@ -227,7 +222,7 @@ const TradingView: React.FC = () => {
         const ohlcUpdateListener = (data: any) => {
             if (!data || data.type !== 'ohlc_update' || !Array.isArray(data.bars)) return;
             // Only update if the incoming symbol/timeframe matches current view
-            if (data.symbol !== symbol || data.timeframe !== timeframe) return;
+            if (data.symbol !== symbolRef.current || data.timeframe !== timeframeRef.current) return;
             // If we have no existing data, we can't merge - just ignore updates until we have initial data
             if (!lastDataRef.current || lastDataRef.current.length === 0) return;
 
@@ -290,14 +285,63 @@ const TradingView: React.FC = () => {
             wsService.removeListener(ohlcUpdateListener);
             wsService.removeListener(priceUpdateListener);
             wsService.removeStatusListener(statusChangeListener);
+            mounted = false;
         };
-    }, [symbol, timeframe]);
+    }, []);
 
     // Fetch and load data
     const fetchAndSetData = async () => {
         setIsLoading(true);
         setError(null);
         try {
+            // Update refs and plugins for the requested symbol/timeframe
+            symbolRef.current = symbol;
+            timeframeRef.current = timeframe;
+            if (userPriceAlertsRef.current) {
+                try {
+                    userPriceAlertsRef.current.setSymbolName(symbol);
+                } catch (e) {
+                    console.warn('Failed to set symbol on alerts plugin', e);
+                }
+            }
+
+            // Ask backend to start tracking this symbol/timeframe
+            try {
+                callAPI("track/ohlc", { ohlc: [{ symbol: symbol, time_frame: timeframe, depth: 3 }] }, "Track OHLC updates");
+            } catch (e) {
+                console.warn('Failed to call track/ohlc', e);
+            }
+            try {
+                callAPI("track/prices", { symbols: [symbol] }, "Track Price updates");
+            } catch (e) {
+                console.warn('Failed to call track/prices', e);
+            }
+
+            // Load existing backend alerts for this symbol and populate UI without creating duplicates
+            try {
+                const backendAlerts: any = await listAlerts(true);
+                if (Array.isArray(backendAlerts) && backendAlerts.length > 0) {
+                    const symbolAlerts = backendAlerts.filter((a: any) => a && a.symbol === symbol);
+                    if (symbolAlerts.length > 0 && userPriceAlertsRef.current) {
+                        // Temporarily unsubscribe to avoid creating backend duplicates when adding to UI
+                        (userPriceAlertsRef.current.alertAdded() as any).unsubscribe();
+                        for (const a of symbolAlerts) {
+                            try {
+                                const uiId = (userPriceAlertsRef.current as any).addAlert(a.target_price);
+                                alertMapRef.current.set(uiId, a.id);
+                                console.log(`Loaded backend alert ${a.id} -> uiId=${uiId} @ ${a.target_price}`);
+                            } catch (e) {
+                                console.error('Failed to add UI alert for backend alert', a, e);
+                            }
+                        }
+                        // Re-subscribe handler (subscribe uses handlers registered earlier)
+                        // Note: existing subscription handlers are still active from mount
+                    }
+                }
+            } catch (err) {
+                console.error('Failed to load backend alerts', err);
+            }
+
             const endDate = new Date(toDate);
 
             const data = await fetchHistoricalOHLC(symbol, new Date(fromDate), endDate, timeframe);
@@ -311,6 +355,9 @@ const TradingView: React.FC = () => {
                     chartRef.current?.timeScale().fitContent();
                 } else {
                     chartRef.current?.timeScale().scrollToPosition(5, true);
+                }
+                if (legendFirstRowRef.current) {
+                    legendFirstRowRef.current.innerHTML = `${symbol} `;
                 }
             }
         } catch (err: any) {
@@ -328,12 +375,18 @@ const TradingView: React.FC = () => {
                         <label htmlFor="symbol" className="text-sm font-medium text-gray-700 mb-2">Symbol</label>
                         <input
                             id="symbol"
+                            list="symbol-list"
                             type="text"
                             value={symbol}
                             onChange={e => setSymbol(e.target.value.toUpperCase())}
                             className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white shadow-sm text-gray-900"
                             style={{color: '#111827'}}
                         />
+                        <datalist id="symbol-list">
+                            {symbolOptions.map(s => (
+                                <option key={s} value={s}>{s}</option>
+                            ))}
+                        </datalist>
                     </div>
                     <div className="flex flex-col">
                         <label htmlFor="timeframe" className="text-sm font-medium text-gray-700 mb-2">Timeframe</label>

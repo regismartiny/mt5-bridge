@@ -11,6 +11,7 @@
 #include <SocketBridge/HistoryManager.mqh>
 #include <Trade/Trade.mqh>
 #include <SocketBridge/ValidationUtils.mqh>
+#include <SocketBridge/JAson.mqh>
 
 struct JsonResponse {
     string jsonContent;
@@ -56,13 +57,13 @@ struct Order {
 class CCommandCore {
 private:
     CData *dataSender;
+    CJAVal jsonVal;
     
     JsonResponse SendError(int status, string details = "");
     JsonResponse SendJson(string jsonContent, int status = 200);
 public:
     // Constructor
-    CCommandCore(CData *ps = NULL) {
-        dataSender = ps;
+    CCommandCore(CData *ps = NULL) : dataSender(ps), jsonVal(NULL, jtUNDEF) {
     }
 
 
@@ -897,14 +898,14 @@ JsonResponse CCommandCore::GetSymbolList() {
    int total = SymbolsTotal(false);
    string json = "\"symbols\": [";
    bool first = true;
-   Print("total symobls : " + IntegerToString(total));
+   Print("total symbols : " + IntegerToString(total));
 
    for(int i = 0; i < total; i++) {
       string symbol = SymbolName(i, false);
 
       int trade_mode = (int)SymbolInfoInteger(symbol, SYMBOL_TRADE_MODE);
       string description = SymbolInfoString(symbol, SYMBOL_DESCRIPTION);
-      string path = SymbolInfoString(symbol, SYMBOL_PATH);
+      string path = jsonVal.Escape(SymbolInfoString(symbol, SYMBOL_PATH));
 
       if(!first) json += ",";
       first = false;
