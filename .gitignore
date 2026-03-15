@@ -1,0 +1,53 @@
+# Node
+node_modules/
+/web/mt_nodejs/node_modules/
+/web/mt5react/node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Build
+/web/mt_nodejs/dist/
+/web/mt5react/dist/
+/web/mt5react/build/
+
+# TypeScript
+*.tsbuildinfo
+
+# Logs
+logs
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor/IDE
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+
+# Python virtualenv
+venv/
+env/
+
+# SQL js DB file (created at runtime)
+/web/mt_nodejs/data/
+
+# Docker
+**/docker-compose.override.yml
+**/.env
+
+# MQL5 build artifacts
+**/*.ex5
+
+# Misc
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+

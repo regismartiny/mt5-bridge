@@ -511,7 +511,7 @@ class z extends L {
         hoverColor: "#50535E",
         crosshairLabelIcon: m
       } : null,
-      color: "#131722",
+      color: "#e8e8e898",
       crosshair: r ? {
         y: e.y,
         text: a

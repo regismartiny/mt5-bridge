@@ -1,58 +1,70 @@
 const BASE_API_URL = "http://localhost:8891/v1";
 
-/**
- * Generic API call function for POST requests.
- * @param endpoint API endpoint (relative to BASE_API_URL)
- * @param payload Request body
- * @param description Description for logging and error messages
- */
-export default async function callAPI(endpoint: string, payload: any, description: string) {
+async function request(endpoint: string, options: { method?: string; body?: any; params?: Record<string, string | number | boolean>; description?: string } = {}) {
+    const { method = 'GET', body, params, description = endpoint } = options;
     try {
-        const url = `${BASE_API_URL}/${endpoint}`;
-        console.log(`Sending to ${description}:`, url);
-        console.log(`Payload:`, JSON.stringify(payload, null, 2));
-
-        const response = await fetch(url, {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-            },
-            body: JSON.stringify(payload),
-        });
-
-        console.log("Response status:", response.status);
-
-        if (!response.ok) {
-            const contentType = response.headers.get("content-type");
-            let errorMessage = `HTTP ${response.status}`;
-
-            if (contentType && contentType.includes("application/json")) {
-                const errorData = await response.json();
-                errorMessage = errorData.message || errorData.error || errorMessage;
-            } else {
-                const errorText = await response.text();
-                console.log("Error response text:", errorText);
-                if (errorText.includes("<!doctype html>") || errorText.includes("<html")) {
-                    errorMessage = `${description} endpoint not found. Check if your server is running and the route exists.`;
-                } else {
-                    errorMessage = errorText.substring(0, 200) + "...";
-                }
-            }
-
-            throw new Error(errorMessage);
+        let url = `${BASE_API_URL}/${endpoint}`;
+        if (params && Object.keys(params).length) {
+            url += '?' + new URLSearchParams(Object.entries(params).reduce((acc: any, [k, v]) => { acc[k] = String(v); return acc; }, {})).toString();
         }
 
-        const result = await response.text();
-        console.log(`${description} response:`, result);
-        console.log(`✅ ${description} sent successfully`);
+        console.log(`Sending to ${description}:`, url);
+        if (body) console.log(`Payload:`, JSON.stringify(body, null, 2));
+
+        const response = await fetch(url, {
+            method,
+            headers: body ? { 'Content-Type': 'application/json' } : undefined,
+            body: body ? JSON.stringify(body) : undefined,
+        });
+
+        console.log('Response status:', response.status);
+
+        const contentType = response.headers.get('content-type') ?? '';
+        let parsed: any = null;
+        if (contentType.includes('application/json')) parsed = await response.json();
+        else parsed = await response.text();
+
+        if (!response.ok) {
+            const errMsg = (parsed && (parsed.message || parsed.error)) || (`HTTP ${response.status} - ${String(parsed).slice(0, 200)}`);
+            throw new Error(errMsg);
+        }
+
+        console.log(`${description} response:`, parsed);
+        return parsed;
     } catch (error) {
         console.error(`❌ ${description} request failed:`, error);
-
-        if (error instanceof TypeError && error.message.includes("fetch")) {
+        if (error instanceof TypeError && error.message.includes('fetch')) {
             alert(`Cannot connect to ${description} server. Make sure your server is running on localhost:8891`);
         } else {
             const errorMessage = error instanceof Error ? error.message : String(error);
             alert(`${description} Error: ${errorMessage}`);
         }
+        throw error;
     }
+}
+
+// Backwards-compatible simple POST helper
+export default async function callAPI(endpoint: string, payload: any, description = endpoint) {
+    return await request(endpoint, { method: 'POST', body: payload, description });
+}
+
+// Alert-specific helpers
+export async function createAlert(payload: { symbol: string; target_price: number; direction: string }) {
+    return await request('alerts', { method: 'POST', body: payload, description: 'Create alert' });
+}
+
+export async function listAlerts(activeOnly = false) {
+    return await request('alerts', { method: 'GET', params: activeOnly ? { active: 'true' } : undefined, description: 'List alerts' });
+}
+
+export async function getAlert(id: number) {
+    return await request(`alerts/${id}`, { method: 'GET', description: 'Get alert' });
+}
+
+export async function deleteAlert(id: number) {
+    return await request(`alerts/${id}`, { method: 'DELETE', description: 'Delete alert' });
+}
+
+export async function postPriceUpdate(symbol: string, price: number) {
+    return await request('alerts/price-update', { method: 'POST', body: { symbol, price }, description: 'Price update for alerts' });
 }

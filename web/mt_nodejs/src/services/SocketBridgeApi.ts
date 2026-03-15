@@ -86,7 +86,7 @@ export const fetchPriceHistory = async (params?: PriceHistoryParams) => {
 
 //track
 export interface TrackPricesBody {
-    symbol: string[];
+    symbols: string[];
 }
 export const postTrackPrices = async (body: TrackPricesBody) => {
     console.log("Posting track prices...");

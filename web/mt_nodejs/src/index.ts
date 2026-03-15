@@ -5,6 +5,7 @@ import swaggerUi from 'swagger-ui-express';
 import swaggerSpec from './swagger';
 import { Request, Response, NextFunction } from 'express';
 import { HttpError } from './utils/HttpError';
+import wsClient from './services/wsClient';
 
 const app = express();
 
@@ -46,4 +47,10 @@ app.use((err: Error, req: Request, res: Response, next: NextFunction): void => {
 const PORT = process.env.PORT || 8891;
 app.listen(PORT, () => {
     console.log(`Server running on http://localhost:${PORT}`);
+    // start websocket client to MT5 to receive price updates and verify alerts
+    try {
+        wsClient.connect();
+    } catch (err) {
+        console.error('Failed to start MT5 websocket client', err);
+    }
 });

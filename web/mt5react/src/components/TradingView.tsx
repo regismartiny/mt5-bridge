@@ -8,7 +8,7 @@ import { correctOHLCData, fetchHistoricalOHLC, fetchHistoricalOHLCBars } from '.
 import type { OHLCPoint } from '../services/dataFeedService';
 import { useState } from "react";
 import wsService from '../services/wsService';
-import callAPI from "../services/apiCallService.ts";
+import callAPI, { createAlert, deleteAlert, postPriceUpdate, listAlerts } from "../services/apiCallService.ts";
 import { TIMEFRAMES } from "../services/timeFrameUtilsService.ts";
 
 const TradingView: React.FC = () => {
@@ -96,7 +96,7 @@ const TradingView: React.FC = () => {
                 window.clearTimeout(visibleRangeTimeoutRef.current);
             }
             visibleRangeTimeoutRef.current = window.setTimeout(async () => {
-                console.log('Visible logical range changed:', logicalRange);
+                // console.log('Visible logical range changed:', logicalRange);
                 if (logicalRange && logicalRange.from < 0) {
                     const numberBarsToLoad = Math.abs(Math.ceil(logicalRange.from));
                     const earliestTime = lastDataRef.current.length > 0 ? lastDataRef.current[0].time * 1000 : Date.now();
@@ -117,12 +117,68 @@ const TradingView: React.FC = () => {
         userPriceAlertsPrimitive.setSymbolName(symbol);
         candlestickSeries.attachPrimitive(userPriceAlertsPrimitive);
 
-        userPriceAlertsPrimitive.alertAdded().subscribe((alertInfo: UserAlertInfo) => {
-            console.log(`➕ Alert added @ ${alertInfo.price} with the id: ${alertInfo.id}`);
-        });
-        userPriceAlertsPrimitive.alertRemoved().subscribe((id: string) => {
-            console.log(`❌ Alert removed with the id: ${id}`);
-        });
+        // Map UI alert id -> backend alert numeric id
+        const alertMap = new Map<string, number>();
+
+        // Named handlers so we can unsubscribe/resubscribe while importing existing alerts
+        const onAlertAdded = async (alertInfo: UserAlertInfo) => {
+            try {
+                const current = lastDataRef.current && lastDataRef.current.length > 0 ? lastDataRef.current[lastDataRef.current.length - 1].close : NaN;
+                const direction = Number.isFinite(current) && alertInfo.price > current ? 'above' : 'below';
+                const created = await createAlert({ symbol, target_price: alertInfo.price, direction });
+                if (created && created.id) {
+                    alertMap.set(alertInfo.id, created.id);
+                }
+                console.log(`➕ Alert added @ ${alertInfo.price} (uiId=${alertInfo.id}) backendId=${created?.id}`);
+            } catch (err) {
+                console.error('Error creating backend alert', err);
+            }
+        };
+
+        const onAlertRemoved = async (id: string) => {
+            try {
+                const backendId = alertMap.get(id);
+                if (!backendId) {
+                    console.log('No backend mapping for alert', id);
+                    return;
+                }
+                await deleteAlert(backendId);
+                alertMap.delete(id);
+                console.log(`❌ Alert removed uiId=${id} backendId=${backendId}`);
+            } catch (err) {
+                console.error('Error deleting backend alert', err);
+            }
+        };
+
+        userPriceAlertsPrimitive.alertAdded().subscribe(onAlertAdded);
+        userPriceAlertsPrimitive.alertRemoved().subscribe(onAlertRemoved);
+
+        // Load existing backend alerts for this symbol and populate UI without creating duplicates
+        (async () => {
+            try {
+                const backendAlerts: any = await listAlerts(true);
+                if (Array.isArray(backendAlerts) && backendAlerts.length > 0) {
+                    const symbolAlerts = backendAlerts.filter((a: any) => a && a.symbol === symbol);
+                    if (symbolAlerts.length > 0) {
+                        // Temporarily unsubscribe to avoid creating backend duplicates when adding to UI
+                        userPriceAlertsPrimitive.alertAdded().unsubscribe(onAlertAdded);
+                        for (const a of symbolAlerts) {
+                            try {
+                                const uiId = (userPriceAlertsPrimitive as any).addAlert(a.target_price);
+                                alertMap.set(uiId, a.id);
+                                console.log(`Loaded backend alert ${a.id} -> uiId=${uiId} @ ${a.target_price}`);
+                            } catch (e) {
+                                console.error('Failed to add UI alert for backend alert', a, e);
+                            }
+                        }
+                        // Re-subscribe handler
+                        userPriceAlertsPrimitive.alertAdded().subscribe(onAlertAdded);
+                    }
+                }
+            } catch (err) {
+                console.error('Failed to load backend alerts', err);
+            }
+        })();
 
         // Track symbol for ohlc updates
         callAPI("track/ohlc", { ohlc: [{ symbol: symbol, time_frame: timeframe, depth: 3 }] }, "Track OHLC updates");
