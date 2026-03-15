@@ -4,19 +4,12 @@ import { CandlestickSeries, ColorType, createChart } from 'lightweight-charts';
 import type { IChartApi } from 'lightweight-charts';
 import { UserPriceAlerts } from '../../plugins/user-price-alerts/user-price-alerts';
 import type { UserAlertInfo } from '../../plugins/user-price-alerts/user-price-alerts';
-import { getHistoricalData } from '../api/nodejsApiClient.ts';
+import { correctOHLCData, fetchHistoricalOHLC, fetchHistoricalOHLCBars } from '../services/dataFeedService';
+import type { OHLCPoint } from '../services/dataFeedService';
 import { useState } from "react";
 import wsService from '../services/wsService';
 import callAPI from "../services/apiCallService.ts";
-
-const TIMEFRAMES = [
-    { value: 'M1', label: '1 Minute' },
-    { value: 'M5', label: '5 Minutes' },
-    { value: 'M15', label: '15 Minutes' },
-    { value: 'H1', label: '1 Hour' },
-    { value: 'H4', label: '4 Hours' },
-    { value: 'D1', label: '1 Day' }
-];
+import { TIMEFRAMES } from "../services/timeFrameUtilsService.ts";
 
 const TradingView: React.FC = () => {
     const firstContainerRef = useRef<HTMLDivElement>(null);
@@ -24,14 +17,22 @@ const TradingView: React.FC = () => {
     const seriesRef = useRef<any>(null);
     const [symbol, setSymbol] = useState('BTCUSD');
     const [timeframe, setTimeframe] = useState('M1');
-    const [fromDate, setFromDate] = useState('2026-03-12');
-    const [toDate, setToDate] = useState(new Date().toISOString().split('T')[0]);
+
+    const formatDateTimeLocal = (d: Date) => {
+        const pad = (n: number) => n.toString().padStart(2, '0');
+        return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    };
+
+    const [fromDate, setFromDate] = useState<string>(formatDateTimeLocal(new Date(new Date().setHours(0, 0, 0, 0))));
+    const [toDate, setToDate] = useState<string>(formatDateTimeLocal(new Date()));
     const [isLoading, setIsLoading] = useState(false);
+    const [fitContent, setFitContent] = useState<boolean>(false);
     const [error, setError] = useState<string | null>(null);
 
     // Chart setup and responsive logic
     // Store last data for live updates
     const lastDataRef = useRef<any[]>([]);
+    const visibleRangeTimeoutRef = useRef<number | null>(null);
 
     useEffect(() => {
         const container = firstContainerRef.current;
@@ -89,6 +90,28 @@ const TradingView: React.FC = () => {
             firstRow.innerHTML = `${symbol} ${priceFormatted ? `<strong>${priceFormatted}</strong>` : ''}`;
         });
 
+        // Infinite scroll logic (debounced)
+        chart.timeScale().subscribeVisibleLogicalRangeChange(logicalRange => {
+            if (visibleRangeTimeoutRef.current) {
+                window.clearTimeout(visibleRangeTimeoutRef.current);
+            }
+            visibleRangeTimeoutRef.current = window.setTimeout(async () => {
+                console.log('Visible logical range changed:', logicalRange);
+                if (logicalRange && logicalRange.from < 0) {
+                    const numberBarsToLoad = Math.abs(Math.ceil(logicalRange.from));
+                    const earliestTime = lastDataRef.current.length > 0 ? lastDataRef.current[0].time * 1000 : Date.now();
+                    const earliestDate = new Date(earliestTime);
+                    console.log(`Loading more data from ${earliestDate.toISOString()} (bars=${numberBarsToLoad})`);
+                    try {
+                        const data = await fetchHistoricalOHLCBars(symbol, earliestDate, numberBarsToLoad, timeframe);
+                        mergeOHLCUpdates(data);
+                    } catch (err) {
+                        console.error('Failed to load historical bars', err);
+                    }
+                }
+            }, 300);
+        });
+
         // Attach price alert plugin
         const userPriceAlertsPrimitive = new UserPriceAlerts();
         userPriceAlertsPrimitive.setSymbolName(symbol);
@@ -109,40 +132,31 @@ const TradingView: React.FC = () => {
 
         // Real-time ohlc updates via wsService (must be top-level)
         wsService.connect();
-        
-        const ohlcUpdateListener = (data: any) => {
-            if (!data || data.type !== 'ohlc_update' || !Array.isArray(data.bars)) return;
-            // Only update if the incoming symbol/timeframe matches current view
-            if (data.symbol !== symbol || data.timeframe !== timeframe) return;
-            // If we have no existing data, we can't merge - just ignore updates until we have initial data
-            if (!lastDataRef.current || lastDataRef.current.length === 0) return;
 
-            console.log('OHLC update received:', data);
+        const mergeOHLCUpdates = (updatedBars: OHLCPoint[]) => {
             try {
-                const bars = data.bars.map((b: any) => {
-                    let t: any = Date.parse(b.time);
-                    return {
-                        time: Number.isFinite(t) ? t : NaN,
-                        open: b.open,
-                        high: b.high,
-                        low: b.low,
-                        close: b.close,
-                    };
-                }).filter((x: any) => Number.isFinite(x.time));
-
-                if (bars.length === 0) return;
-
-                bars.sort((a: any, b: any) => a.time - b.time);
+                console.log('Merging OHLC updates:', updatedBars);
 
                 const existing = lastDataRef.current || [];
-                let merged: any[] = [];
+                let merged: OHLCPoint[] = [];
 
                 if (existing.length === 0) {
-                    merged = bars;
+                    merged = updatedBars;
                 } else {
-                    const firstIncoming = bars[0].time;
-                    const prefix = existing.filter((d: any) => d.time < firstIncoming);
-                    merged = [...prefix, ...bars];
+                    const lastIncoming = updatedBars[updatedBars.length - 1].time;
+                    const firstExisting = existing[0].time;
+                    const lastExisting = existing[existing.length - 1].time;
+                    if (lastIncoming > lastExisting) {
+                        // Append new bars at the end
+                        const suffix = updatedBars.filter((d: any) => d.time > existing[existing.length - 1].time);
+                        suffix.sort((a: any, b: any) => a.time - b.time);
+                        merged = [...existing, ...suffix];
+                    } else {
+                        // Insert new bars at the beginning
+                        const prefix = updatedBars.filter((d: any) => d.time < firstExisting);
+                        prefix.sort((a: any, b: any) => a.time - b.time);
+                        merged = [...prefix, ...updatedBars];
+                    }
                 }
 
                 lastDataRef.current = merged;
@@ -153,6 +167,27 @@ const TradingView: React.FC = () => {
                 console.error('Error applying OHLC update', err);
             }
         };
+        
+        const ohlcUpdateListener = (data: any) => {
+            if (!data || data.type !== 'ohlc_update' || !Array.isArray(data.bars)) return;
+            // Only update if the incoming symbol/timeframe matches current view
+            if (data.symbol !== symbol || data.timeframe !== timeframe) return;
+            // If we have no existing data, we can't merge - just ignore updates until we have initial data
+            if (!lastDataRef.current || lastDataRef.current.length === 0) return;
+
+            console.log('OHLC update received:', data);
+            const ohlcPoints = data.bars.map((item: any) => {
+                const t = Date.parse(item.time);
+                return {
+                    time: Number.isFinite(t) ? t : NaN,
+                    open: item.open,
+                    high: item.high,
+                    low: item.low,
+                    close: item.close,
+                } as OHLCPoint;
+            });
+            mergeOHLCUpdates(correctOHLCData(ohlcPoints));
+        };
 
         const priceUpdateListener = (data: any) => {
             if (
@@ -161,7 +196,7 @@ const TradingView: React.FC = () => {
                 typeof data.bid === 'number' && data.bid > 0 &&
                 typeof data.timestamp === 'number' && data.timestamp > 0
             ) {
-                console.log('Price update received:', data);
+                // console.log('Price update received:', data);
                 const lastData = lastDataRef.current[lastDataRef.current.length - 1];
 
                 // Update last bar's close/high/low using bid/ask
@@ -190,43 +225,37 @@ const TradingView: React.FC = () => {
         wsService.addListener(priceUpdateListener);
    
         return () => {
+            if (visibleRangeTimeoutRef.current) {
+                window.clearTimeout(visibleRangeTimeoutRef.current);
+                visibleRangeTimeoutRef.current = null;
+            }
             chart.remove();
             resizeObserver.disconnect();
             wsService.removeListener(ohlcUpdateListener);
+            wsService.removeListener(priceUpdateListener);
+            wsService.removeStatusListener(statusChangeListener);
         };
-    }, [symbol]);
+    }, [symbol, timeframe]);
 
     // Fetch and load data
     const fetchAndSetData = async () => {
         setIsLoading(true);
         setError(null);
         try {
-            let endOfDayToDate = new Date(toDate);
-            endOfDayToDate.setHours(23, 59, 59, 999);
-            const endOfDayToDateStr = endOfDayToDate.toISOString().split('T')[0] + 'T23:59:59';
-            
-            const res = await getHistoricalData(symbol, fromDate, endOfDayToDateStr, timeframe);
-            // lightweight-charts expects { time, open, high, low, close }
-            let data = res.data.map((item: any) => {
-                let t = Date.parse(item.time);
-                return {
-                    time: Number.isFinite(t) ? t : NaN,
-                    open: item.open,
-                    high: item.high,
-                    low: item.low,
-                    close: item.close,
-                };
-            });
-            data = data.filter(d => Number.isFinite(d.time));
-            data = data.sort((a, b) => a.time - b.time);
+            const endDate = new Date(toDate);
+
+            const data = await fetchHistoricalOHLC(symbol, new Date(fromDate), endDate, timeframe);
             lastDataRef.current = data;
             if (data.length === 0) {
                 setError('No valid data to display.');
             }
             if (seriesRef.current) {
                 seriesRef.current.setData(data);
-                chartRef.current?.timeScale().fitContent();
-                chartRef.current?.timeScale().scrollToPosition(5, true);
+                if (fitContent) {
+                    chartRef.current?.timeScale().fitContent();
+                } else {
+                    chartRef.current?.timeScale().scrollToPosition(5, true);
+                }
             }
         } catch (err: any) {
             setError(err.message || 'Failed to load data');
@@ -268,10 +297,10 @@ const TradingView: React.FC = () => {
                         <label htmlFor="fromDate" className="text-sm font-medium text-gray-700 mb-2">From Date</label>
                         <input
                             id="fromDate"
-                            type="date"
+                            type="datetime-local"
                             value={fromDate}
                             onChange={e => setFromDate(e.target.value)}
-                            max={new Date().toISOString().split('T')[0]}
+                            max={formatDateTimeLocal(new Date())}
                             className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white shadow-sm text-gray-900"
                             style={{color: '#111827'}}
                         />
@@ -280,25 +309,43 @@ const TradingView: React.FC = () => {
                         <label htmlFor="toDate" className="text-sm font-medium text-gray-700 mb-2">To Date</label>
                         <input
                             id="toDate"
-                            type="date"
+                            type="datetime-local"
                             value={toDate}
                             onChange={e => setToDate(e.target.value)}
                             min={fromDate}
-                            max={new Date().toISOString().split('T')[0]}
+                            max={formatDateTimeLocal(new Date())}
                             className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white shadow-sm text-gray-900"
                             style={{color: '#111827'}}
                         />
                     </div>
-                    <div className="flex flex-col justify-end">
-                        <label className="text-sm font-medium text-gray-700 mb-2 invisible">Fetch</label>
-                        <button
-                            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition cursor-pointer font-sans"
-                            style={{ minHeight: '40px' }}
-                            onClick={fetchAndSetData}
-                            disabled={isLoading}
-                        >
-                            {isLoading ? 'Loading...' : 'Fetch Data'}
-                        </button>
+                    <div className="flex items-center gap-4">
+                        <div className="flex items-center gap-2">
+                            <input
+                                id="fitContent"
+                                type="checkbox"
+                                checked={fitContent}
+                                onChange={e => {
+                                    const val = e.target.checked;
+                                    setFitContent(val);
+                                    if (val) {
+                                        chartRef.current?.timeScale().fitContent();
+                                    }
+                                }}
+                                className="w-4 h-4 text-blue-600 bg-white border-gray-300 rounded focus:ring-blue-500"
+                            />
+                            <label htmlFor="fitContent" className="text-sm text-gray-700">Fit content</label>
+                        </div>
+                        <div className="flex flex-col justify-end">
+                            <label className="text-sm font-medium text-gray-700 mb-2 invisible">Fetch</label>
+                            <button
+                                className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition cursor-pointer font-sans"
+                                style={{ minHeight: '40px' }}
+                                onClick={fetchAndSetData}
+                                disabled={isLoading}
+                            >
+                                {isLoading ? 'Loading...' : 'Fetch Data'}
+                            </button>
+                        </div>
                     </div>
                 </div>
                 <div
